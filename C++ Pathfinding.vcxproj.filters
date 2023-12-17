@@ -18,8 +18,5 @@
     <ClCompile Include="src\aplication.cpp">
       <Filter>Quelldateien</Filter>
     </ClCompile>
-    <ClCompile Include="x64\aplication.cpp">
-      <Filter>Quelldateien</Filter>
-    </ClCompile>
   </ItemGroup>
 </Project>

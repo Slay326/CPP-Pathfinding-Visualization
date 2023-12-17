@@ -12,9 +12,14 @@
 #include <set>
 #include <queue>
 #include <cmath>
+#include <limits>
+#include <chrono>
 
 using namespace std;
 using namespace rapidxml;
+using std::chrono::high_resolution_clock;
+using std::chrono::duration_cast;
+using std::chrono::milliseconds;
 
 struct Node {
     string id;
@@ -39,6 +44,10 @@ struct DijkstraNode {
     string id;
 };
 
+struct visualizeLine {
+    float x1, y1, x2, y2;
+};
+
 bool operator<(const AStarNode& a, const AStarNode& b) {
     return a.f_cost() > b.f_cost();
 }
@@ -53,6 +62,7 @@ double heuristic(const Node& a, const Node& b) {
 
 unordered_map<string, vector<string>> visitedPathsAStar;
 unordered_map<string, vector<string>> visitedPathsPathsDijkstra;
+vector<visualizeLine> linesToDraw;
 
 
 
@@ -70,6 +80,8 @@ void createAdjacencyList(const vector<Way>& ways, const unordered_map<string, No
             adjList[to].push_back(make_pair(from, cost));
         }
     }
+    cout << "Adjecency List Size: " << adjList.size() << endl;
+    cout << "visitedPathsPathsAStar: " << visitedPathsAStar.size() << endl; 
 }
 
 void expand_neighbours_a_star(const string& current_id, priority_queue<AStarNode>& open_set,
@@ -77,17 +89,20 @@ void expand_neighbours_a_star(const string& current_id, priority_queue<AStarNode
     const unordered_map<string, Node>& nodes,
     unordered_map<string, string>& came_from,
     unordered_map<string, vector<string>>& visitedPathsAStar) {
+    cout << "Expanding neighbours for node: " << current_id << endl;
     for (const auto& neighbour : adjList[current_id]) {
         string neighbour_id = neighbour.first;
         double travel_cost = neighbour.second;
 
         double tentative_g_cost = g_costs[current_id] + travel_cost;
+        /*cout << "tentative costs:" << tentative_g_cost << endl << "g_costs:" << g_costs[current_id] << endl << "neighbour g_cost: " << g_costs[neighbour_id] << endl;*/
         if (tentative_g_cost < g_costs[neighbour_id]) {
             g_costs[neighbour_id] = tentative_g_cost;
             double h_cost = heuristic(nodes.at(neighbour_id), nodes.at(goal_id));
             open_set.push({ tentative_g_cost, h_cost, neighbour_id });
             came_from[neighbour_id] = current_id;
             visitedPathsAStar[current_id].push_back(neighbour_id);
+            //cout << "Hinzugefügt zu visitedPathsStar: " << current_id << " -> " << neighbour_id << endl;
         }
     }
 }
@@ -114,10 +129,15 @@ vector<string> a_star_algorithm(const string& start_id, const string& goal_id, c
     priority_queue<AStarNode> open_set;
     unordered_map<string, double> g_costs;
     unordered_map<string, string> came_from;
-
+    
+    for (const auto& node_pair : nodes) {
+        const string& node_id = node_pair.first;
+        g_costs[node_id] = (numeric_limits<double>::max)();
+    }
+    g_costs[start_id] = 0;
     AStarNode start_node{ 0, heuristic(nodes.at(start_id), nodes.at(goal_id)), start_id };
     open_set.push(start_node);
-    g_costs[start_id] = 0;
+    cout << "Open set size at start of A*: " << open_set.size() << endl;
     while (!open_set.empty()) {
         AStarNode current_node = open_set.top();
         open_set.pop();
@@ -167,6 +187,11 @@ vector<string> dijkstra_algorithm(const string& start_id, const string& goal_id,
     }
     return {};
 }
+
+void addLineToDraw(float x1, float y1, float x2, float y2) {
+    linesToDraw.push_back({ x1, y1, x2, y2 });
+}
+
 
 bool isRoad(xml_node<>* way) {
     for (xml_node<>* tag = way->first_node("tag"); tag; tag = tag->next_sibling("tag")) {
@@ -247,7 +272,6 @@ void convertCoordinates(double latitude, double longitude, float& x, float& y) {
     x = static_cast<float>((longitude - MIN_LONGITUDE) / (MAX_LONGITUDE - MIN_LONGITUDE) * 2 - 1);
     y = static_cast<float>((latitude - MIN_LATITUDE) / (MAX_LATITUDE - MIN_LATITUDE) * 2 - 1);
 }
-const 
 const GLchar* vertexShaderSource = R"glsl(
     #version 330 core
     layout (location = 0) in vec2 position;
@@ -299,6 +323,8 @@ void initRendering() {
 void drawConnection(float x1, float y1, float x2, float y2, GLuint shaderProgram, float r, float g, float b) {
     float vertices[] = { x1, y1, x2, y2 };
 
+    //cout << "Drawing line from (" << x1 << ", " << y1 << ") to (" << x2 << ", " << y2 << ")/node" << endl;
+
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
@@ -312,6 +338,12 @@ void drawConnection(float x1, float y1, float x2, float y2, GLuint shaderProgram
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
+}
+
+void drawAllLines(GLuint shaderProgram, float r, float g, float b) {
+    for (const auto& line : linesToDraw) {
+        drawConnection(line.x1, line.y1, line.x2, line.y2, shaderProgram, r, g, b);
+    }
 }
 
 void drawNode(float x, float y, GLuint shaderProgram) {
@@ -358,21 +390,48 @@ void drawMap(const unordered_map<string, Node>& nodes, const vector<Way>& ways, 
 void visualizeVisitedPaths(const unordered_map<string, vector<string>>& visitedPaths,
     const unordered_map<string, Node>& nodes,
     GLuint shaderProgram,
-    float r, float g, float b) {
-    cout << "Anzahl der besuchten Pfade:" << visitedPaths.size() << endl; 
-    for (const auto& pair : visitedPaths) {
-        const Node& fromNode = nodes.at(pair.first);
-        cout << "von Knoten:" << pair.first << ", Anzahl der Nachbarn: " << pair.second.size() << endl;
-        for (const string& toNodeId : pair.second) {
-            const Node& toNode = nodes.at(toNodeId);
-            
-            float x1, y1, x2, y2;
-            convertCoordinates(fromNode.latitude, fromNode.longitude, x1, y1);
-            convertCoordinates(toNode.latitude, toNode.longitude, x2, y2);
-            cout << "Zeichne Verbindung von (" << x1 << ", " << y1 << ") nach (" << x2 << ", " << y2 << ")" << endl;
-            drawConnection(x1, y1, x2, y2, shaderProgram, r, g, b);
+    //float r, float g, float b,
+    size_t& currentIndex,
+    high_resolution_clock::time_point& lastTime,
+    const int delaysInMs) {
+
+    auto currentTime = high_resolution_clock::now();
+    auto elapsedTime = duration_cast<milliseconds>(currentTime - lastTime).count();
+
+    /*cout << "Current Index: " << currentIndex << ", Elapsed Time: " << elapsedTime << "ms/node" << endl;*/
+    if (elapsedTime > delaysInMs) {
+        auto it = visitedPaths.begin();
+        std::advance(it, currentIndex);
+        if (it != visitedPaths.end()) {
+            const Node& fromNode = nodes.at(it->first);
+            /*cout << "Drawing path from node: " << it->first << endl;*/
+            for (const string& toNodeId : it->second) {
+                const Node& toNode = nodes.at(toNodeId);
+                float x1, y1, x2, y2;
+                convertCoordinates(fromNode.latitude, fromNode.longitude, x1, y1);
+                convertCoordinates(toNode.latitude, toNode.longitude, x2, y2);
+                //cout << "Drawing connection from (" << x1 << ", " << y1 << ") to (" << x2 << ", " << y2 << ")/node" << endl;
+                /*drawConnection(x1, y1, x2, y2, shaderProgram, r, g, b);*/
+                addLineToDraw(x1, y1, x2, y2);
+            }
+            currentIndex++;
+            lastTime = currentTime;
         }
     }
+
+    //for (const auto& pair : visitedPaths) {
+    //    const Node& fromNode = nodes.at(pair.first);
+    //    cout << "von Knoten:" << pair.first << ", Anzahl der Nachbarn: " << pair.second.size() << endl;
+    //    for (const string& toNodeId : pair.second) {
+    //        const Node& toNode = nodes.at(toNodeId);
+    //        
+    //        float x1, y1, x2, y2;
+    //        convertCoordinates(fromNode.latitude, fromNode.longitude, x1, y1);
+    //        convertCoordinates(toNode.latitude, toNode.longitude, x2, y2);
+    //        cout << "Zeichne Verbindung von (" << x1 << ", " << y1 << ") nach (" << x2 << ", " << y2 << ")" << endl;
+    //        drawConnection(x1, y1, x2, y2, shaderProgram, r, g, b);
+    //    }
+    //}
 }
 
 
@@ -412,14 +471,32 @@ int main() {
     
     createAdjacencyList(ways, nodes);
 
-    string start_id = "20113718";
-    string goal_id = "8575720420";
+    //string start_id = "20113732";
+    string start_id = "266003505";
+    if (adjList.find(start_id) != adjList.end()) {
+        cout << "Nachbar von " << start_id << ": " << endl;
+        for (const auto& neighbour : adjList[start_id]) {
+            cout << " - " << neighbour.first << " mit Kosten: " << neighbour.second << endl;
+
+        }
+    }
+    else {
+        cout << "Keine Nachbarn für Knoten: " << start_id << endl;
+    }
+    string goal_id = "1777211890";
+    //string goal_id = "21723528";
     vector<string> pathAStar = a_star_algorithm(start_id, goal_id, nodes);
     vector<string> pathDijkstra = dijkstra_algorithm(start_id, goal_id, nodes);
 
 
     bool showAStarPath = false;
     bool showDijkstraPath = false;
+
+    size_t currentIndexAStar = 0;
+    size_t currentIndexDijkstra = 0;
+    auto lastTimeAStar = high_resolution_clock::now();
+    auto lastTimeDijkstra = high_resolution_clock::now();
+    const int delayInMs = 0;
 
     GLuint shaderProgram = createShaderProgram();
     initRendering();
@@ -431,23 +508,24 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT);
         glLineWidth(0.5f);
 
-        //drawMap(nodes, ways, shaderProgram);
-        visualizeVisitedPaths(visitedPathsAStar, nodes, shaderProgram, 0.48627f, 0.9882f, 0.0f);
+        drawMap(nodes, ways, shaderProgram);
+        visualizeVisitedPaths(visitedPathsAStar, nodes, shaderProgram/*, 0.48627f, 0.9882f, 0.0f*/, currentIndexAStar, lastTimeAStar, delayInMs);
+        drawAllLines(shaderProgram, 0.48627f, 0.9882f, 0.0f);
         glDebugMessageCallback;
-        //if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        //    showAStarPath = !showAStarPath;
+       /* if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+            showAStarPath = !showAStarPath;
 
-        //}
-        //if (showAStarPath) {
-        //   
-        //}
-        //if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        //    showDijkstraPath = !showDijkstraPath;
+        }
+        if (showAStarPath) {
+           
+        }
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+            showDijkstraPath = !showDijkstraPath;
 
-        //}
-        //if (showDijkstraPath) {
-        //    visualizeVisitedPaths(visitedPathsPathsDijkstra, nodes, shaderProgram, 0.5568f, 0.9882f, 0.0f);
-        //}
+        }
+        if (showDijkstraPath) {
+            visualizeVisitedPaths(visitedPathsPathsDijkstra, nodes, shaderProgram, 0.5568f, 0.9882f, 0.0f);
+        }*/
 
         
 
